@@ -2,13 +2,7 @@
 # pylint: disable=missing-docstring
 import json
 
-import aiohttp
 import pytest
-
-from custom_components.hacs.helpers.functions.information import (
-    get_repository,
-    get_tree,
-)
 
 from tests.sample_data import (
     repository_data,
@@ -20,7 +14,7 @@ TOKEN = "xxxxxxxxxxxxxxxxxxxxxxx"
 
 
 @pytest.mark.asyncio
-async def test_base(aresponses, event_loop):
+async def test_base(aresponses, repository_integration):
     aresponses.add(
         "api.github.com",
         "/rate_limit",
@@ -46,7 +40,11 @@ async def test_base(aresponses, event_loop):
         aresponses.Response(body=json.dumps(tree_files_base), headers=response_rate_limit_header),
     )
 
-    async with aiohttp.ClientSession(loop=event_loop) as session:
-        repository, _ = await get_repository(session, TOKEN, "test/test")
-        tree = await get_tree(repository, repository.default_branch)
-        assert "hacs.json" in [x.full_path for x in tree]
+    (
+        repository_integration.repository_object,
+        _,
+    ) = await repository_integration.async_get_legacy_repository_object()
+    tree = await repository_integration.get_tree(
+        repository_integration.repository_object.default_branch
+    )
+    assert "hacs.json" in [x.full_path for x in tree]

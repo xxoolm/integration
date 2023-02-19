@@ -2,23 +2,31 @@
 # pytest: disable=protected-access
 import asyncio
 import logging
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+from aiogithubapi import GitHub, GitHubAPI
+from aiogithubapi.const import ACCEPT_HEADERS
+from awesomeversion import AwesomeVersion
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HAVERSION
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceNotFound
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import Integration
 from homeassistant.runner import HassEventLoopPolicy
 import pytest
+import pytest_asyncio
 
-from custom_components.hacs.base import HacsCommon, HacsCore, HacsSystem
-from custom_components.hacs.const import DOMAIN
-from custom_components.hacs.hacsbase.hacs import Hacs
-from custom_components.hacs.helpers.classes.repository import HacsRepository
-from custom_components.hacs.helpers.functions.version_to_install import (
-    version_to_install,
+from custom_components.hacs.base import (
+    HacsBase,
+    HacsCommon,
+    HacsCore,
+    HacsRepositories,
+    HacsSystem,
 )
+from custom_components.hacs.const import DOMAIN
 from custom_components.hacs.repositories import (
     HacsAppdaemonRepository,
     HacsIntegrationRepository,
@@ -27,20 +35,25 @@ from custom_components.hacs.repositories import (
     HacsPythonScriptRepository,
     HacsThemeRepository,
 )
-from custom_components.hacs.share import SHARE
-from custom_components.hacs.tasks.manager import HacsTaskManager
+from custom_components.hacs.utils.configuration_schema import TOKEN as CONF_TOKEN
+from custom_components.hacs.utils.queue_manager import QueueManager
+from custom_components.hacs.validate.manager import ValidationManager
 
 from tests.async_mock import MagicMock
 from tests.common import (
     TOKEN,
     async_test_home_assistant,
     dummy_repository_base,
-    fixture,
     mock_storage as mock_storage,
 )
 
 # Set default logger
 logging.basicConfig(level=logging.DEBUG)
+if "GITHUB_ACTION" in os.environ:
+    logging.basicConfig(
+        format="::%(levelname)s:: %(message)s",
+        level=logging.DEBUG,
+    )
 
 # All test coroutines will be treated as marked.
 pytestmark = pytest.mark.asyncio
@@ -48,6 +61,10 @@ pytestmark = pytest.mark.asyncio
 asyncio.set_event_loop_policy(HassEventLoopPolicy(False))
 # Disable fixtures overriding our beautiful policy
 asyncio.set_event_loop_policy = lambda policy: None
+
+# Disable sleep in tests
+_sleep = asyncio.sleep
+asyncio.sleep = lambda _: _sleep(0)
 
 
 @pytest.fixture()
@@ -69,15 +86,14 @@ def hass(event_loop, tmpdir):
 
     def exc_handle(loop, context):
         """Handle exceptions by rethrowing them, which will fail the test."""
-        exceptions.append(context["exception"])
+        if exception := context.get("exception"):
+            exceptions.append(exception)
         orig_exception_handler(loop, context)
 
     exceptions = []
     hass_obj = event_loop.run_until_complete(async_test_home_assistant(event_loop, tmpdir))
     orig_exception_handler = event_loop.get_exception_handler()
     event_loop.set_exception_handler(exc_handle)
-
-    hass_obj.http = MagicMock()
 
     yield hass_obj
 
@@ -88,16 +104,14 @@ def hass(event_loop, tmpdir):
         raise ex
 
 
-@pytest.fixture
-def hacs(hass):
+@pytest_asyncio.fixture
+async def hacs(hass: HomeAssistant):
     """Fixture to provide a HACS object."""
-    hacs_obj = Hacs()
-    hacs_obj._repositories = []
-    hacs_obj._repositories_by_full_name = {}
-    hacs_obj._repositories_by_id = {}
+    hacs_obj = HacsBase()
     hacs_obj.hass = hass
-    hacs_obj.tasks = HacsTaskManager(hacs=hacs_obj, hass=hass)
-    hacs_obj.session = async_create_clientsession(hass)
+    hacs_obj.validation = ValidationManager(hacs=hacs_obj, hass=hass)
+    hacs_obj.session = async_get_clientsession(hass)
+    hacs_obj.repositories = HacsRepositories()
 
     hacs_obj.integration = Integration(
         hass=hass,
@@ -106,82 +120,97 @@ def hacs(hass):
         manifest={"domain": DOMAIN, "version": "0.0.0", "requirements": ["hacs_frontend==1"]},
     )
     hacs_obj.common = HacsCommon()
-    hacs_obj.githubapi = AsyncMock()
     hacs_obj.data = AsyncMock()
+    hacs_obj.queue = QueueManager(hass=hass)
     hacs_obj.core = HacsCore()
     hacs_obj.system = HacsSystem()
 
     hacs_obj.core.config_path = hass.config.path()
-    hacs_obj.core.ha_version = HAVERSION
+    hacs_obj.core.ha_version = AwesomeVersion(HAVERSION)
     hacs_obj.version = hacs_obj.integration.version
     hacs_obj.configuration.token = TOKEN
 
-    SHARE["hacs"] = hacs_obj
+    ## Old GitHub client
+    hacs_obj.github = GitHub(
+        token=hacs_obj.configuration.token,
+        session=hacs_obj.session,
+        headers={
+            "User-Agent": "HACS/pytest",
+            "Accept": ACCEPT_HEADERS["preview"],
+        },
+    )
+
+    ## New GitHub client
+    hacs_obj.githubapi = GitHubAPI(
+        token=hacs_obj.configuration.token,
+        session=hacs_obj.session,
+        **{"client_name": "HACS/pytest"},
+    )
+
+    hacs_obj.queue.clear()
+
+    hass.data[DOMAIN] = hacs_obj
+
     yield hacs_obj
 
 
 @pytest.fixture
 def repository(hacs):
     """Fixtrue for HACS repository object"""
-    repository_obj = HacsRepository()
-    repository_obj.hacs = hacs
-    repository_obj.hass = hacs.hass
-    repository_obj.hacs.core.config_path = hacs.hass.config.path()
-    repository_obj.logger = logging.getLogger("test")
-    repository_obj.data.full_name = "test/test"
-    repository_obj.data.full_name_lower = "test/test"
-    repository_obj.data.domain = "test"
-    repository_obj.data.last_version = "3"
-    repository_obj.data.selected_tag = "3"
-    repository_obj.ref = version_to_install(repository_obj)
-    repository_obj.integration_manifest = {"config_flow": False, "domain": "test"}
-    repository_obj.data.published_tags = ["1", "2", "3"]
-    repository_obj.data.update_data(fixture("repository_data.json"))
-
-    async def update_repository():
-        pass
-
-    repository_obj.update_repository = update_repository
-    yield repository_obj
+    yield dummy_repository_base(hacs)
 
 
 @pytest.fixture
 def repository_integration(hacs):
     """Fixtrue for HACS integration repository object"""
-    repository_obj = HacsIntegrationRepository("test/test")
+    repository_obj = HacsIntegrationRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
 
 
 @pytest.fixture
 def repository_theme(hacs):
     """Fixtrue for HACS theme repository object"""
-    repository_obj = HacsThemeRepository("test/test")
+    repository_obj = HacsThemeRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
 
 
 @pytest.fixture
 def repository_plugin(hacs):
     """Fixtrue for HACS plugin repository object"""
-    repository_obj = HacsPluginRepository("test/test")
+    repository_obj = HacsPluginRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
 
 
 @pytest.fixture
 def repository_python_script(hacs):
     """Fixtrue for HACS python_script repository object"""
-    repository_obj = HacsPythonScriptRepository("test/test")
+    repository_obj = HacsPythonScriptRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
 
 
 @pytest.fixture
 def repository_appdaemon(hacs):
     """Fixtrue for HACS appdaemon repository object"""
-    repository_obj = HacsAppdaemonRepository("test/test")
+    repository_obj = HacsAppdaemonRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
 
 
 @pytest.fixture
 def repository_netdaemon(hacs):
     """Fixtrue for HACS netdaemon repository object"""
-    repository_obj = HacsNetdaemonRepository("test/test")
+    repository_obj = HacsNetdaemonRepository(hacs, "test/test")
     yield dummy_repository_base(hacs, repository_obj)
+
+
+@pytest.fixture
+def config_entry() -> ConfigEntry:
+    """Fixture for a config entry."""
+    yield ConfigEntry(
+        version=1,
+        domain=DOMAIN,
+        title="",
+        data={CONF_TOKEN: TOKEN},
+        source="user",
+        options={},
+        unique_id="12345",
+    )

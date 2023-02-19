@@ -5,8 +5,6 @@ import json
 import pytest
 
 from custom_components.hacs.exceptions import HacsException
-from custom_components.hacs.helpers.functions.validate_repository import common_validate
-from custom_components.hacs.share import get_removed
 
 from tests.sample_data import (
     release_data,
@@ -71,7 +69,7 @@ async def test_common_base(hacs, repository, aresponses):
     repository.ref = None
     repository.hacs = hacs
 
-    await common_validate(repository)
+    await repository.common_validate()
 
 
 @pytest.mark.asyncio
@@ -133,7 +131,7 @@ async def test_get_releases_exception(repository, aresponses):
         ),
     )
     repository.ref = None
-    await common_validate(repository)
+    await repository.common_validate()
     assert not repository.data.releases
 
 
@@ -154,13 +152,13 @@ async def test_common_archived(repository, aresponses):
             headers=response_rate_limit_header,
         ),
     )
-    repository.data.archived = True
+
     with pytest.raises(HacsException):
-        await common_validate(repository)
+        await repository.common_validate()
 
 
 @pytest.mark.asyncio
-async def test_common_blacklist(repository, aresponses):
+async def test_common_blacklist(hacs, repository, aresponses):
     aresponses.add(
         "api.github.com",
         "/rate_limit",
@@ -173,10 +171,10 @@ async def test_common_blacklist(repository, aresponses):
         "get",
         aresponses.Response(body=json.dumps(repository_data), headers=response_rate_limit_header),
     )
-    removed = get_removed("test/test")
+    removed = hacs.repositories.removed_repository("test/test")
     assert removed.repository == "test/test"
     with pytest.raises(HacsException):
-        await common_validate(repository)
+        await repository.common_validate()
 
 
 @pytest.mark.asyncio
@@ -199,7 +197,7 @@ async def test_common_base_exception_does_not_exsist(hacs, repository, aresponse
     )
     hacs.status.startup = False
     with pytest.raises(HacsException):
-        await common_validate(repository)
+        await repository.common_validate()
 
 
 @pytest.mark.asyncio
@@ -242,4 +240,4 @@ async def test_common_base_exception_tree_issues(repository, aresponses, hacs):
     )
     hacs.status.startup = False
     with pytest.raises(HacsException):
-        await common_validate(repository)
+        await repository.common_validate()

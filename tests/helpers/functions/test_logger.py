@@ -1,9 +1,9 @@
-import os
+# pylint: disable=missing-module-docstring, missing-function-docstring
+from logging import Logger
 
-from custom_components.hacs.utils.logger import getLogger
+from custom_components.hacs.utils.logger import LOGGER
 
 
 def test_logger():
-    os.environ["GITHUB_ACTION"] = "value"
-    getLogger()
-    del os.environ["GITHUB_ACTION"]
+    hacs_logger = LOGGER
+    assert isinstance(hacs_logger, Logger)

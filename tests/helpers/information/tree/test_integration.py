@@ -2,25 +2,21 @@
 # pylint: disable=missing-docstring
 import json
 
-import aiohttp
 import pytest
 
-from custom_components.hacs.helpers.functions.information import (
-    get_repository,
-    get_tree,
-)
+from custom_components.hacs.enums import HacsCategory
 
 from tests.sample_data import (
+    category_test_treefiles,
     repository_data,
     response_rate_limit_header,
-    tree_files_base_integration,
 )
 
 TOKEN = "xxxxxxxxxxxxxxxxxxxxxxx"
 
 
 @pytest.mark.asyncio
-async def test_base(aresponses, event_loop):
+async def test_base(aresponses, repository_integration):
     aresponses.add(
         "api.github.com",
         "/rate_limit",
@@ -44,18 +40,22 @@ async def test_base(aresponses, event_loop):
         "/repos/test/test/git/trees/main",
         "get",
         aresponses.Response(
-            body=json.dumps(tree_files_base_integration()),
+            body=json.dumps(category_test_treefiles(HacsCategory.INTEGRATION)),
             headers=response_rate_limit_header,
         ),
     )
 
-    async with aiohttp.ClientSession(loop=event_loop) as session:
-        repository, _ = await get_repository(session, TOKEN, "test/test")
-        tree = await get_tree(repository, repository.default_branch)
-        filestocheck = [
-            "custom_components/test/__init__.py",
-            "custom_components/test/translations/en.json",
-            "custom_components/test/manifest.json",
-        ]
-        for check in filestocheck:
-            assert check in [x.full_path for x in tree]
+    (
+        repository_integration.repository_object,
+        _,
+    ) = await repository_integration.async_get_legacy_repository_object()
+    tree = await repository_integration.get_tree(
+        repository_integration.repository_object.default_branch
+    )
+    filestocheck = [
+        "custom_components/test/__init__.py",
+        "custom_components/test/translations/en.json",
+        "custom_components/test/manifest.json",
+    ]
+    for check in filestocheck:
+        assert check in [x.full_path for x in tree]

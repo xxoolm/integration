@@ -30,6 +30,8 @@ body:
         required: true
       - label: This issue only contains 1 issue (if you have multiple issues, open one issue for each issue).
         required: true
+      - label: This issue is not a duplicate issue of currently [open](https://github.com/hacs/integration/issues) or issues [pending release](https://github.com/hacs/integration/issues?q=is%3Aissue+is%3Aclosed+sort%3Aupdated-desc+milestone%3Anext).
+        required: true
 - type: textarea
   attributes:
     label: "Describe the issue"
@@ -50,8 +52,12 @@ body:
 - type: textarea
   attributes:
     label: "Debug logs"
-    description: "To enable debug logs check this https://hacs.xyz/docs/basic/logs"
+    description: "To enable debug logs check this https://hacs.xyz/docs/basic/logs, this **needs** to include _everything_ from startup of Home Assistant to the point where you encounter the issue."
     render: text
   validations:
     required: true
 
+- type: textarea
+  attributes:
+    label: "Diagnostics dump"
+    description: "Drag or paste the diagnostics dump file here. (see https://hacs.xyz/docs/basic/diagnostics for info)"

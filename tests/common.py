@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,invalid-name
+from __future__ import annotations
+
 import asyncio
 from contextlib import contextmanager
 import functools as ft
@@ -7,53 +9,61 @@ import os
 
 from homeassistant import auth, config_entries, core as ha
 from homeassistant.auth import auth_store
+from homeassistant.components.http import HomeAssistantHTTP
 from homeassistant.const import EVENT_HOMEASSISTANT_CLOSE
 from homeassistant.helpers import storage
 from homeassistant.helpers.device_registry import DeviceRegistry
 from homeassistant.helpers.entity_registry import EntityRegistry
+from homeassistant.helpers.issue_registry import IssueRegistry
 import homeassistant.util.dt as date_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
-from custom_components.hacs.helpers.classes.repository import HacsRepository
-from custom_components.hacs.helpers.functions.version_to_install import (
-    version_to_install,
-)
-from custom_components.hacs.utils.logger import getLogger
+from custom_components.hacs.repositories.base import HacsRepository
+from custom_components.hacs.utils.logger import LOGGER
 
 from tests.async_mock import AsyncMock, Mock, patch
 
-_LOGGER = getLogger(__name__)
+_LOGGER = LOGGER
 TOKEN = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 INSTANCES = []
 
 
 def fixture(filename, asjson=True):
     """Load a fixture."""
-    path = os.path.join(os.path.dirname(__file__), "fixtures", filename)
-    with open(path, encoding="utf-8") as fptr:
-        if asjson:
-            return json.loads(fptr.read())
-        return fptr.read()
+    filename = f"{filename}.json" if "." not in filename else filename
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "fixtures",
+        filename.lower().replace("/", "_"),
+    )
+    try:
+        with open(path, encoding="utf-8") as fptr:
+            _LOGGER.debug("Loading fixture from %s", path)
+            if asjson:
+                return json.loads(fptr.read())
+            return fptr.read()
+    except OSError as err:
+        raise OSError(f"Missing fixture for {path.split('fixtures/')[1]}") from err
 
 
 def dummy_repository_base(hacs, repository=None):
     if repository is None:
-        repository = HacsRepository()
+        repository = HacsRepository(hacs)
+        repository.data.full_name = "test/test"
+        repository.data.full_name_lower = "test/test"
     repository.hacs = hacs
     repository.hacs.hass = hacs.hass
     repository.hacs.core.config_path = hacs.hass.config.path()
-    repository.logger = getLogger("test.test")
-    repository.data.full_name = "test/test"
-    repository.data.full_name_lower = "test/test"
+    repository.logger = LOGGER
     repository.data.domain = "test"
     repository.data.last_version = "3"
     repository.data.selected_tag = "3"
-    repository.ref = version_to_install(repository)
+    repository.ref = repository.version_to_download()
     repository.integration_manifest = {"config_flow": False, "domain": "test"}
     repository.data.published_tags = ["1", "2", "3"]
-    repository.data.update_data(fixture("repository_data.json"))
+    repository.data.update_data(fixture("repository_data.json", asjson=True))
 
-    async def update_repository():
+    async def update_repository(*args, **kwargs):
         pass
 
     repository.update_repository = update_repository
@@ -124,6 +134,7 @@ async def async_test_home_assistant(loop, tmpdir):
         "custom_components": {},
         "device_registry": DeviceRegistry(hass),
         "entity_registry": EntityRegistry(hass),
+        "issue_registry": IssueRegistry(hass),
     }
 
     hass.config_entries = config_entries.ConfigEntries(hass, {})
@@ -134,6 +145,24 @@ async def async_test_home_assistant(loop, tmpdir):
 
     # Mock async_start
     orig_start = hass.async_start
+
+    hass.http = HomeAssistantHTTP(
+        hass,
+        server_host=None,
+        server_port=8123,
+        ssl_certificate=None,
+        ssl_peer_certificate=None,
+        ssl_key=None,
+        trusted_proxies=[],
+        ssl_profile="modern",
+    )
+
+    await hass.http.async_initialize(
+        cors_origins=[],
+        use_x_forwarded_for=False,
+        login_threshold=3,
+        is_ban_enabled=False,
+    )
 
     async def mock_async_start():
         """Start the mocking."""
